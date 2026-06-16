@@ -13,7 +13,7 @@
 // Compatibility shim that lets the single CUDA backend compile unchanged as
 // either native CUDA (nvcc) or HIP (ROCm clang). When USE_HIP is defined the
 // CUDA runtime surface this backend uses is aliased onto its hipXxx
-// equivalents, which are 1:1. CUDA builds are byte-identical: this header
+// equivalents, which are 1:1. CUDA builds are unchanged: this header
 // includes <cuda_runtime.h> (and <cuda_fp16.h> when half precision is active)
 // and defines nothing.
 
