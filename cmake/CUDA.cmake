@@ -26,12 +26,10 @@ message ("CUDA Support is: ${ENABLE_CUDA}")
 message ("HIP (ROCm) backend is: ${USE_HIP}")
 
 if (ENABLE_CUDA AND USE_HIP)
+    # enable_language(HIP) honors an explicit -DCMAKE_HIP_ARCHITECTURES, otherwise
+    # auto-detects the host GPU(s), and errors on a no-GPU build host.
     enable_language(HIP)
     target_compile_definitions(qrack PUBLIC ENABLE_CUDA=1 USE_HIP=1)
-
-    if (NOT DEFINED CMAKE_HIP_ARCHITECTURES)
-        set(CMAKE_HIP_ARCHITECTURES gfx90a)
-    endif ()
     message("CMAKE_HIP_ARCHITECTURES: ${CMAKE_HIP_ARCHITECTURES}")
 
     find_package(hip REQUIRED)
