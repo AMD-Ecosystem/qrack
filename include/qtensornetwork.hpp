@@ -26,7 +26,11 @@ typedef std::shared_ptr<QTensorNetwork> QTensorNetworkPtr;
 // typedef std::shared_ptr<TensorNetworkMeta> TensorNetworkMetaPtr;
 // #endif
 
+#if ENABLE_ALU
 class QTensorNetwork : public QAlu, public QInterface {
+#else
+class QTensorNetwork : public QInterface {
+#endif
 protected:
     bool useHostRam;
     bool isSparse;
@@ -93,6 +97,17 @@ public:
         : QTensorNetwork({}, qBitCount, initState, rgp, phaseFac, doNorm, randomGlobalPhase, useHostMem, deviceId,
               useHardwareRNG, useSparseStateVec, norm_thresh, devList, qubitThreshold, separation_thresh)
     {
+    }
+
+    bool AreFactorized(std::vector<bitLenInt> a, std::vector<bitLenInt> b, bool flushCache = false)
+    {
+        std::set<bitLenInt> q(a.begin(), a.end());
+        q.insert(b.begin(), b.end());
+
+        bool toRet;
+        RunAsAmplitudes([&](QInterfacePtr ls) { toRet = ls->AreFactorized(a, b, flushCache); }, q);
+
+        return toRet;
     }
 
     void SetSdrp(real1_f sdrp)
@@ -499,7 +514,7 @@ public:
     {
         RunAsAmplitudes([&](QInterfacePtr ls) { std::dynamic_pointer_cast<QAlu>(ls)->DECBCD(toAdd, start, length); });
     }
-    void INCDECBCDC(const bitCapInt& toSub, bitLenInt start, bitLenInt length, bitLenInt carryIndex)
+    void INCDECBCDC(const bitCapInt& toAdd, bitLenInt start, bitLenInt length, bitLenInt carryIndex)
     {
         RunAsAmplitudes([&](QInterfacePtr ls) {
             std::dynamic_pointer_cast<QAlu>(ls)->INCDECBCDC(toAdd, start, length, carryIndex);

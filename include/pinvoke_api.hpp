@@ -156,7 +156,7 @@ MICROSOFT_QUANTUM_DECL void MCT(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uint
 MICROSOFT_QUANTUM_DECL void MCAdjS(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_ uintq q);
 MICROSOFT_QUANTUM_DECL void MCAdjT(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_ uintq q);
 MICROSOFT_QUANTUM_DECL void MCU(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_ uintq q, _In_ double theta,
-    _In_ double phi, _In_ double lambda);
+    _In_ double phi, _In_ double lambda, _In_ double gamma);
 MICROSOFT_QUANTUM_DECL void MCMtrx(
     _In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_reads_(8) double* m, _In_ uintq q);
 
@@ -169,7 +169,7 @@ MICROSOFT_QUANTUM_DECL void MACT(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uin
 MICROSOFT_QUANTUM_DECL void MACAdjS(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_ uintq q);
 MICROSOFT_QUANTUM_DECL void MACAdjT(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_ uintq q);
 MICROSOFT_QUANTUM_DECL void MACU(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_ uintq q, _In_ double theta,
-    _In_ double phi, _In_ double lambda);
+    _In_ double phi, _In_ double lambda, _In_ double gamma);
 MICROSOFT_QUANTUM_DECL void MACMtrx(
     _In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_reads_(8) double* m, _In_ uintq q);
 
@@ -286,6 +286,8 @@ MICROSOFT_QUANTUM_DECL bool TrySeparate1Qb(_In_ uintq sid, _In_ uintq qi1);
 MICROSOFT_QUANTUM_DECL bool TrySeparate2Qb(_In_ uintq sid, _In_ uintq qi1, _In_ uintq qi2);
 MICROSOFT_QUANTUM_DECL bool TrySeparateTol(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* q, _In_ double tol);
 MICROSOFT_QUANTUM_DECL void Separate(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* q);
+MICROSOFT_QUANTUM_DECL bool AreFactorized(
+    _In_ uintq sid, _In_ uintq n1, _In_reads_(n1) uintq* a, _In_ uintq n2, _In_reads_(n2) uintq* b, _In_ bool fc);
 MICROSOFT_QUANTUM_DECL double GetUnitaryFidelity(_In_ uintq sid);
 MICROSOFT_QUANTUM_DECL void ResetUnitaryFidelity(_In_ uintq sid);
 MICROSOFT_QUANTUM_DECL void SetSdrp(_In_ uintq sid, _In_ double sdrp);

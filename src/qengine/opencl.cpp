@@ -79,6 +79,7 @@ QEngineOCL::QEngineOCL(bitLenInt qBitCount, const bitCapInt& initState, qrack_ra
     , deviceID(devID)
     , wait_refs()
     , nrmArray(new real1[0], [](real1* r) { delete[] r; })
+    , isSyncDispatch(getenv("QRACK_OCL_SYNC") != nullptr)
 {
     InitOCL(devID);
     clFinish();
@@ -3158,7 +3159,7 @@ void QEngineOCL::GetQuantumState(complex* outputState)
 
     if (!stateBuffer) {
         return par_for(
-            0, maxQPowerOcl, [&](const bitCapIntOcl& lcv, const unsigned& cpu) { outputState[lcv] = ZERO_R1; });
+            0, maxQPowerOcl, [&](const bitCapIntOcl& lcv, const unsigned& cpu) { outputState[lcv] = ZERO_CMPLX; });
     }
 
     EventVecPtr waitVec = ResetWaitEvents();
@@ -3291,6 +3292,7 @@ QEnginePtr QEngineOCL::CloneEmpty()
 QInterfacePtr QEngineOCL::Copy()
 {
     QEngineOCLPtr copyPtr = std::dynamic_pointer_cast<QEngineOCL>(CloneEmpty());
+    Finish();
     copyPtr->stateVec = stateVec;
     copyPtr->stateBuffer = stateBuffer;
     // TODO: This is a hack for TryDecompose():
@@ -3411,9 +3413,6 @@ std::shared_ptr<complex> QEngineOCL::AllocStateVec(bitCapIntOcl elemCount, bool 
         return nullptr;
     }
 
-#if defined(__ANDROID__)
-    return std::shared_ptr<complex>(elemCount);
-#else
     // elemCount is always a power of two, but might be smaller than QRACK_ALIGN_SIZE
     size_t allocSize = sizeof(complex) * elemCount;
     if (allocSize < QRACK_ALIGN_SIZE) {
@@ -3427,8 +3426,6 @@ std::shared_ptr<complex> QEngineOCL::AllocStateVec(bitCapIntOcl elemCount, bool 
         (complex*)_aligned_malloc(allocSize, QRACK_ALIGN_SIZE), [](complex* c) { _aligned_free(c); });
 #else
     return std::shared_ptr<complex>((complex*)aligned_alloc(QRACK_ALIGN_SIZE, allocSize), [](complex* c) { free(c); });
-#endif
-
 #endif
 }
 

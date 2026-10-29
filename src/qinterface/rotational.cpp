@@ -27,25 +27,27 @@ void QInterface::U(bitLenInt target, real1_f theta, real1_f phi, real1_f lambda)
 
 /// Controlled general unitary gate
 void QInterface::CU(
-    const std::vector<bitLenInt>& controls, bitLenInt target, real1_f theta, real1_f phi, real1_f lambda)
+    const std::vector<bitLenInt>& controls, bitLenInt target, real1_f theta, real1_f phi, real1_f lambda, real1_f gamma)
 {
+    const complex eig = complex((real1)cos(gamma), (real1)sin(gamma));
     const real1 cos0 = (real1)cos(theta / 2);
     const real1 sin0 = (real1)sin(theta / 2);
-    const complex uGate[4]{ complex(cos0, ZERO_R1), sin0 * complex((real1)(-cos(lambda)), (real1)(-sin(lambda))),
-        sin0 * complex((real1)cos(phi), (real1)sin(phi)),
-        cos0 * complex((real1)cos(phi + lambda), (real1)sin(phi + lambda)) };
+    const complex uGate[4]{ cos0 * eig, sin0 * eig * complex((real1)(-cos(lambda)), (real1)(-sin(lambda))),
+        sin0 * eig * complex((real1)cos(phi), (real1)sin(phi)),
+        cos0 * eig * complex((real1)cos(phi + lambda), (real1)sin(phi + lambda)) };
     MCMtrx(controls, uGate, target);
 }
 
 /// (Anti-)Controlled general unitary gate
 void QInterface::AntiCU(
-    const std::vector<bitLenInt>& controls, bitLenInt target, real1_f theta, real1_f phi, real1_f lambda)
+    const std::vector<bitLenInt>& controls, bitLenInt target, real1_f theta, real1_f phi, real1_f lambda, real1_f gamma)
 {
+    const complex eig = complex((real1)cos(gamma), (real1)sin(gamma));
     const real1 cos0 = (real1)cos(theta / 2);
     const real1 sin0 = (real1)sin(theta / 2);
-    const complex uGate[4]{ complex(cos0, ZERO_R1), sin0 * complex((real1)(-cos(lambda)), (real1)(-sin(lambda))),
-        sin0 * complex((real1)cos(phi), (real1)sin(phi)),
-        cos0 * complex((real1)cos(phi + lambda), (real1)sin(phi + lambda)) };
+    const complex uGate[4]{ cos0 * eig, sin0 * eig * complex((real1)(-cos(lambda)), (real1)(-sin(lambda))),
+        sin0 * eig * complex((real1)cos(phi), (real1)sin(phi)),
+        cos0 * eig * complex((real1)cos(phi + lambda), (real1)sin(phi + lambda)) };
     MACMtrx(controls, uGate, target);
 }
 
@@ -269,8 +271,8 @@ void QInterface::ExpZ(real1_f radians, bitLenInt qubit)
 /// Controlled "phase shift gate" - if control bit is true, rotates target bit as e^(-i*\theta/2) around |1> state
 void QInterface::CRT(real1_f radians, bitLenInt control, bitLenInt target)
 {
-    const bitLenInt controls[1]{ control };
-    MCPhase(controls, 1, ONE_CMPLX, complex((real1)cos(radians / 2), (real1)sin(radians / 2)), target);
+    MCPhase(std::vector<bitLenInt>{ control }, ONE_CMPLX, complex((real1)cos(radians / 2), (real1)sin(radians / 2)),
+        target);
 }
 
 /// Controlled x axis rotation - if control bit is true, rotates as e^(-i*\theta/2) around Pauli x axis
@@ -280,8 +282,7 @@ void QInterface::CRX(real1_f radians, bitLenInt control, bitLenInt target)
     const real1 sine = (real1)sin(radians / 2);
     const complex pauliRX[4]{ complex(cosine, ZERO_R1), complex(ZERO_R1, sine), complex(ZERO_R1, sine),
         complex(cosine, ZERO_R1) };
-    const bitLenInt controls[1]{ control };
-    MCMtrx(controls, 1, pauliRX, target);
+    MCMtrx(std::vector<bitLenInt>{ control }, pauliRX, target);
 }
 #endif
 } // namespace Qrack

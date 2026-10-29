@@ -839,7 +839,7 @@ bool QUnit::TrySeparate(bitLenInt qubit1, bitLenInt qubit2)
     y = ONE_R1_F - 2 * unit->ACProb(mapped1, mapped2);
     unit->MACMtrx(controls, mtrx, mapped2);
     const real1_f inclinationAnti = atan2(sqrt(x * x + y * y), z);
-    const real1_f azimuthAnti = atan2(y, z);
+    const real1_f azimuthAnti = atan2(y, x);
     unit->AntiCIAI(mapped1, mapped2, azimuthAnti, inclinationAnti);
 
     shard1.MakeDirty();
@@ -1040,7 +1040,7 @@ real1_f QUnit::ProbBase(bitLenInt qubit)
     return clampProb(norm(shard.amp1));
 }
 
-void QUnit::PhaseParity(real1 radians, const bitCapInt& mask)
+void QUnit::PhaseParity(real1_f radians, const bitCapInt& mask)
 {
     if (mask >= maxQPower) {
         throw std::invalid_argument("QUnit::PhaseParity mask out-of-bounds!");
@@ -2766,7 +2766,7 @@ void QUnit::ApplyEitherControlled(std::vector<bitLenInt> controlVec, const std::
         const real1_f infidelityFactor = ONE_R1_F / pow2Ocl(interControlCount);
 
         // Act the classical shadow of the gate payload.
-        if ((2 * p) > ONE_R1_F) {
+        if ((p > HALF_R1_F) || ((p == HALF_R1_F) && (Rand() < HALF_R1_F))) {
             QEngineShard& shard = shards[t];
             shard.isPhaseDirty = true;
             shard.isProbDirty |= (shard.pauliBasis != PauliZ) || !isPhase;
@@ -3213,6 +3213,107 @@ void QUnit::INCDECSC(
 void QUnit::INCDECSC(const bitCapInt& toMod, bitLenInt start, bitLenInt length, bitLenInt carryIndex)
 {
     INCx(&QAlu::INCSC, toMod, start, length, carryIndex);
+}
+
+void QUnit::MULModNOut(
+    const bitCapInt& toMod, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart, bitLenInt length)
+{
+    if (isBadBitRange(inStart, length, qubitCount)) {
+        throw std::invalid_argument("QUnit::MUL inStart range is out-of-bounds!");
+    }
+
+    if (isBadBitRange(outStart, length, qubitCount)) {
+        throw std::invalid_argument("QUnit::MUL outStart range is out-of-bounds!");
+    }
+
+    if (bi_compare_1(toMod) == 0) {
+        return SetReg(outStart, length, ZERO_BCI);
+    }
+
+    // Keep the bits separate, if cheap to do so:
+    if (CheckBitsPermutation(inStart, length)) {
+        bitCapInt res;
+        bi_div_mod(toMod * GetCachedPermutation(inStart, length), modN, nullptr, &res);
+        return SetReg(outStart, length, res);
+    }
+
+    SetReg(outStart, length, ZERO_BCI);
+
+    // Otherwise, form the potentially entangled representation:
+    std::dynamic_pointer_cast<QAlu>(EntangleRange(inStart, length, outStart, length))
+        ->MULModNOut(toMod, modN, shards[inStart].mapped, shards[outStart].mapped, length);
+    DirtyShardRangePhase(inStart, length);
+    DirtyShardRange(outStart, length);
+}
+
+void QUnit::IMULModNOut(
+    const bitCapInt& toMod, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart, bitLenInt length)
+{
+    if (isBadBitRange(inStart, length, qubitCount)) {
+        throw std::invalid_argument("QUnit::MUL inStart range is out-of-bounds!");
+    }
+
+    if (isBadBitRange(outStart, length, qubitCount)) {
+        throw std::invalid_argument("QUnit::MUL outStart range is out-of-bounds!");
+    }
+
+    // Otherwise, form the potentially entangled representation:
+    std::dynamic_pointer_cast<QAlu>(EntangleRange(inStart, length, outStart, length))
+        ->IMULModNOut(toMod, modN, shards[inStart].mapped, shards[outStart].mapped, length);
+    DirtyShardRangePhase(inStart, length);
+    DirtyShardRange(outStart, length);
+}
+
+void QUnit::CMULModNOut(const bitCapInt& toMod, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart,
+    bitLenInt length, const std::vector<bitLenInt>& controls)
+{
+    if (controls.empty()) {
+        return MULModNOut(toMod, modN, inStart, outStart, length);
+    }
+
+    SetReg(outStart, length, ZERO_BCI);
+
+    if (isBadBitRange(inStart, length, qubitCount)) {
+        throw std::invalid_argument("QUnit::CMULModNOut inStart range is out-of-bounds!");
+    }
+
+    ThrowIfQbIdArrayIsBad(controls, qubitCount,
+        "QUnit::CMULModNOut parameter controls array values must be within allocated qubit bounds!");
+
+    // Try to optimize away the whole gate, or as many controls as is opportune.
+    std::vector<bitLenInt> controlVec;
+    bitCapInt _perm = pow2(controls.size());
+    bi_decrement(&_perm, 1U);
+    if (TrimControls(controls, controlVec, &_perm)) {
+        return;
+    }
+
+    CMULModx(&QAlu::CMULModNOut, toMod, modN, inStart, outStart, length, controlVec);
+}
+
+void QUnit::CIMULModNOut(const bitCapInt& toMod, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart,
+    bitLenInt length, const std::vector<bitLenInt>& controls)
+{
+    if (controls.empty()) {
+        return IMULModNOut(toMod, modN, inStart, outStart, length);
+    }
+
+    if (isBadBitRange(inStart, length, qubitCount)) {
+        throw std::invalid_argument("QUnit::CIMULModNOut inStart range is out-of-bounds!");
+    }
+
+    ThrowIfQbIdArrayIsBad(controls, qubitCount,
+        "QUnit::CIMULModNOut parameter controls array values must be within allocated qubit bounds!");
+
+    // Try to optimize away the whole gate, or as many controls as is opportune.
+    std::vector<bitLenInt> controlVec;
+    bitCapInt _perm = pow2(controls.size());
+    bi_decrement(&_perm, 1U);
+    if (TrimControls(controls, controlVec, &_perm)) {
+        return;
+    }
+
+    CMULModx(&QAlu::CIMULModNOut, toMod, modN, inStart, outStart, length, controlVec);
 }
 
 #if ENABLE_BCD
@@ -3980,35 +4081,27 @@ void QUnit::ApplyBuffer(PhaseShardPtr phaseShard, bitLenInt control, bitLenInt t
         const real1_f pt = Prob(target);
         real1_f pc = isAnti ? ONE_R1_F - Prob(control) : Prob(control);
 
-        // We're "gaming" order of gate application, but not in a malicious or biased way.
-        bool didNegate = false;
         if (phaseShard->isInvert) {
-            H(target);
-
-            const real1_f xpt = Prob(target);
-            // If the CNOT control (when acted second) is the most polarized,
-            // act a phase correction on the less-polarized target state.
-            // Otherwise, act the CNOT first if its control is more polarized.
-            QRACK_CONST real1_f oneHalf = ONE_R1_F / 2;
-            const real1_f pcHi = (pc > oneHalf) ? pc : (ONE_R1_F - pc);
-            const real1_f ptHi = (pt > oneHalf) ? pt : (ONE_R1_F - pt);
-            const real1_f xptHi = (xpt > oneHalf) ? xpt : (ONE_R1_F - xpt);
-            didNegate = ((pcHi > ptHi) && (pcHi > xptHi)) ? (ptHi >= xptHi) : (xptHi >= ptHi);
-
-            if (didNegate) {
-                // Commuting CNOT to the other side of phase reverses these.
-                std::swap(polarTop, polarBottom);
-                // Act CNOT shadow.
-                ElideCz(isAnti, control, target, xpt, pc);
+            bool didNegate = false;
+            if (std::abs(pc - HALF_R1_F) <= FP_NORM_EPSILON_F) {
+                if ((2 * Rand()) < ONE_R1_F) {
+                    didNegate = true;
+                }
+            } else if (pc > 0.5) {
+                didNegate = true;
             }
-
-            H(target);
+            if (didNegate) {
+                X(target);
+                logFidelity += (double)log(pc);
+            }
         }
 
         bool ptHi = pt > pc;
         real1_f pHi = ptHi ? pt : pc;
         real1_f pLo = ptHi ? pc : pt;
-        bool pState = abs(pHi - HALF_R1) >= abs(pLo - HALF_R1);
+        real1_f absHi = abs(pHi - HALF_R1);
+        real1_f absLo = abs(pLo - HALF_R1);
+        bool pState = (absHi > absLo) || ((absHi == absLo) && (Rand() < HALF_R1_F));
         const real1_f bottomInfidelity = PhaseInfidelity(polarBottom);
         const real1_f probInfidelity = ONE_R1_F - (pState ? pHi : (ONE_R1_F - pLo));
 
@@ -4029,7 +4122,9 @@ void QUnit::ApplyBuffer(PhaseShardPtr phaseShard, bitLenInt control, bitLenInt t
         ptHi = pt > pc;
         pHi = ptHi ? pt : pc;
         pLo = ptHi ? pc : pt;
-        pState = abs(pHi - HALF_R1) >= abs(pLo - HALF_R1);
+        absHi = abs(pHi - HALF_R1);
+        absLo = abs(pLo - HALF_R1);
+        pState = (absHi > absLo) || ((absHi == absLo) && (Rand() < HALF_R1_F));
         const real1_f topInfidelity = PhaseInfidelity(polarTop);
 
         if (!pState) {
@@ -4044,13 +4139,6 @@ void QUnit::ApplyBuffer(PhaseShardPtr phaseShard, bitLenInt control, bitLenInt t
 
         logFidelity += (double)(log(ONE_R1_F - probInfidelity * topInfidelity / 2));
         CheckFidelity();
-
-        if (phaseShard->isInvert && !didNegate) {
-            // Act CNOT shadow (if necessary and we didn't handle it earlier).
-            H(target);
-            ElideCz(isAnti, control, target, Prob(target), ONE_R1_F - pc);
-            H(target);
-        }
     }
     freezeBasis2Qb = false;
 }

@@ -3232,6 +3232,7 @@ QEnginePtr QEngineCUDA::CloneEmpty()
 QInterfacePtr QEngineCUDA::Copy()
 {
     QEngineCUDAPtr copyPtr = std::dynamic_pointer_cast<QEngineCUDA>(CloneEmpty());
+    Finish();
     copyPtr->stateVec = stateVec;
     copyPtr->stateBuffer = stateBuffer;
     // TODO: This is a hack for TryDecompose():
@@ -3339,9 +3340,6 @@ std::shared_ptr<complex> QEngineCUDA::AllocStateVec(bitCapIntOcl elemCount, bool
         return nullptr;
     }
 
-#if defined(__ANDROID__)
-    return std::shared_ptr<complex>(elemCount);
-#else
     // elemCount is always a power of two, but might be smaller than QRACK_ALIGN_SIZE
     size_t allocSize = sizeof(complex) * (size_t)elemCount;
     if (allocSize < QRACK_ALIGN_SIZE) {
@@ -3355,8 +3353,6 @@ std::shared_ptr<complex> QEngineCUDA::AllocStateVec(bitCapIntOcl elemCount, bool
         (complex*)_aligned_malloc(allocSize, QRACK_ALIGN_SIZE), [](complex* c) { _aligned_free(c); });
 #else
     return std::shared_ptr<complex>((complex*)aligned_alloc(QRACK_ALIGN_SIZE, allocSize), [](complex* c) { free(c); });
-#endif
-
 #endif
 }
 

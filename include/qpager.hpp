@@ -192,6 +192,7 @@ public:
             qPage->ZeroAmplitudes();
         }
     }
+
     void CopyStateVec(QEnginePtr src) { CopyStateVec(std::dynamic_pointer_cast<QPager>(src)); }
     void CopyStateVec(QPagerPtr src)
     {
@@ -203,6 +204,7 @@ public:
             qPages[i]->CopyStateVec(src->qPages[i]);
         }
     }
+
     bool IsZeroAmplitude()
     {
         for (size_t i = 0U; i < qPages.size(); ++i) {
@@ -213,6 +215,7 @@ public:
 
         return true;
     }
+
     void GetAmplitudePage(complex* pagePtr, bitCapIntOcl offset, bitCapIntOcl length)
     {
         GetSetAmplitudePage(pagePtr, nullptr, offset, length);
@@ -248,7 +251,9 @@ public:
             qPages[offset + i].swap(engine->qPages[i]);
         }
     }
+
     QEnginePtr CloneEmpty();
+
     void QueueSetDoNormalize(bool doNorm)
     {
         Finish();
@@ -259,6 +264,10 @@ public:
         Finish();
         runningNorm = runningNrm;
     }
+
+    void LossySaveStateVector(std::string f, int p = 6, int b = 4);
+    void LossyLoadStateVector(std::string f);
+
     real1_f ProbReg(bitLenInt start, bitLenInt length, const bitCapInt& permutation)
     {
         CombineEngines();
@@ -428,7 +437,6 @@ public:
 
     real1_f Prob(bitLenInt qubitIndex);
     real1_f ProbMask(const bitCapInt& mask, const bitCapInt& permutation);
-    // TODO: QPager not yet used in Q#, but this would need a real implementation:
     real1_f ProbParity(const bitCapInt& mask)
     {
         if (bi_compare_0(mask) == 0) {
@@ -441,7 +449,7 @@ public:
     bool ForceMParity(const bitCapInt& mask, bool result, bool doForce = true)
     {
         if (bi_compare_0(mask) == 0) {
-            return ZERO_R1_F;
+            return false;
         }
 
         CombineEngines();

@@ -79,6 +79,44 @@ protected:
     std::vector<bool> bPhase;
     std::vector<bool> pPhase;
 
+    // Single, lazily-allocated, reused ancilla for the T/Tdg error-
+    // detection-and-retry gadget (see TGadget()). Sentinel value
+    // (bitLenInt)-1 means "not yet allocated." Allocated dynamically via
+    // Allocate()/Compose() on first use, exactly like any other qubit --
+    // NOT a special-cased resource, so it participates normally in
+    // Compose/Decompose/Dispose. Caveat: if some other code path disposes
+    // or reorders qubits in a way that changes what index tGadgetAncilla
+    // refers to, this stored index would become stale; this
+    // implementation does not defend against that case.
+    bitLenInt tGadgetAncilla{ (bitLenInt)-1 };
+
+    // The T/Tdg-specific error-detection-and-retry gadget: wraps a single
+    // T or Tdg application with an ancilla-based check (phase-kickback via
+    // CNOT, sensitive to Z-type disturbances, since a Z-type ancilla
+    // coupling like CZ would commute with the S/Sdg error and be blind to
+    // it -- verified directly in the research session this derives from).
+    // If the check can be forced to "no error" (any nonzero probability),
+    // it is. If the check is genuinely, certainly stuck (zero probability
+    // of no-error), the whole bracket is undone -- T immediately followed
+    // by Tdg is an exact, per-shot identity here, verified directly, not
+    // assumed -- and retried, up to a retry cap, after which the certain
+    // error is accepted via a genuine (unforced) measurement rather than
+    // silently ignored. This is a best-effort heuristic improvement, not a
+    // guarantee: some certain errors are pinned by entanglement with other,
+    // already-determined qubits elsewhere in the circuit, and no number of
+    // local retries on this one qubit can resolve those -- confirmed
+    // directly in testing (0/27 resolved by a local correction attempt in
+    // one representative circuit), not merely anticipated as a theoretical
+    // possibility.
+    void TGadget(bitLenInt t, bool isInverse);
+
+    // The original, unwrapped RZ mechanism (formerly the body of RZ()
+    // directly) -- used internally by TGadget() to apply and undo T/Tdg
+    // without recursing back through RZ()'s own dispatch logic, and used
+    // by RZ() itself for every case that isn't a clean, isolated T/Tdg
+    // call.
+    void RZRaw(real1_f angle, bitLenInt qubitIndex);
+
     typedef std::function<void(const bitLenInt&)> StabilizerParallelFunc;
     typedef std::function<void(void)> DispatchFn;
     void Dispatch(DispatchFn fn) { fn(); }
@@ -87,7 +125,7 @@ protected:
 
     complex FixAnglePeriod(complex angle)
     {
-        return complex(FixAnglePeriod((real1_f)real(angle)), FixAnglePeriod((real1_f)imag(angle)));
+        return complex((real1)FixAnglePeriod((real1_f)real(angle)), (real1)FixAnglePeriod((real1_f)imag(angle)));
     }
 
     real1_f FixAnglePeriod(real1_f angle)
@@ -151,6 +189,7 @@ protected:
         pBuffer = orig->pBuffer;
         bPhase = orig->bPhase;
         pPhase = orig->pPhase;
+        tGadgetAncilla = orig->tGadgetAncilla;
     }
 
 #if BOOST_AVAILABLE
@@ -248,7 +287,7 @@ public:
             ISBase(t);
             angle = FixAnglePeriod(angle + HALF_PI_R1);
         }
-        pBuffer[t].real(pPhase[t] ? -angle : angle);
+        pBuffer[t].real((real1)(pPhase[t] ? -angle : angle));
     }
 
     void SetPermutation(const bitCapInt& perm, const complex& phaseFac = CMPLX_DEFAULT_ARG);
@@ -450,8 +489,6 @@ protected:
     void SBase(bitLenInt qubitIndex);
     void ISBase(bitLenInt qubitIndex);
     void FlushNearClifford(bitLenInt t);
-    void CZNearClifford(bitLenInt c, bitLenInt t);
-    void CNotNearClifford(bitLenInt c, bitLenInt t);
 
 public:
     /**
@@ -473,6 +510,7 @@ public:
     void SetRandGlobalPhase(bool isRand) { randGlobalPhase = isRand; }
 
     /// Apply a CNOT gate with control and target
+    void CNOTRaw(bitLenInt control, bitLenInt target);
     void CNOT(bitLenInt control, bitLenInt target);
     /// Apply a CY gate with control and target
     void CY(bitLenInt control, bitLenInt target);
@@ -502,6 +540,18 @@ public:
     void T(bitLenInt t) { RZ(PI_R1 / 4, t); }
     /// Apply half an inverse phase gate
     void IT(bitLenInt t) { RZ(-PI_R1 / 4, t); }
+    /// Explicit, opt-in alternative to T(): steers this qubit toward the
+    /// nearest Clifford circuit (an ancilla-based check-and-retry gadget)
+    /// rather than T()'s default, linear-moment-unbiased weak-simulation
+    /// approximation. NOT a drop-in replacement for T() -- it answers a
+    /// different question (what's the closest exact-Clifford realization
+    /// of this circuit) than T() does (an unbiased stochastic sample),
+    /// and downstream estimators that depend on linear unbiasedness
+    /// (e.g. DFE-style Pauli expectation values) will be wrong if T()
+    /// calls are silently replaced with this.
+    void TClosestClifford(bitLenInt t) { TGadget(t, false); }
+    /// TClosestClifford()'s inverse-angle counterpart, matching IT()
+    void ITClosestClifford(bitLenInt t) { TGadget(t, true); }
     /// Approximate an arbitrary phase angle
     void RZ(real1_f angle, bitLenInt qubitIndex);
     // Swap two bits

@@ -40,13 +40,13 @@
             std::make_unique<const std::lock_guard<std::mutex>>(simulatorMutexes[simulator], std::adopt_lock);         \
     }
 #else
-#define SIMULATOR_LOCK_GUARD(simulator)                                                                                                   \
-    std::unique_ptr<const std::lock_guard<std::mutex>> simulatorLock;                                                                     \
-    if (true) {                                                                                                                           \
-        std::lock(metaOperationMutex, simulatorMutexes[simulator]);                                                                       \
-        const std::lock_guard<std::mutex> metaLock(metaOperationMutex, std::adopt_lock);CMPLX_DEFAULT_ARG, false, true, hp, -1, true, sp)                               \
+#define SIMULATOR_LOCK_GUARD(simulator)                                                                                \
+    std::unique_ptr<const std::lock_guard<std::mutex>> simulatorLock;                                                  \
+    if (true) {                                                                                                        \
+        std::lock(metaOperationMutex, simulatorMutexes[simulator]);                                                    \
+        const std::lock_guard<std::mutex> metaLock(metaOperationMutex, std::adopt_lock);                               \
         simulatorLock = std::unique_ptr<const std::lock_guard<std::mutex>>(                                            \
-            new const std::lock_guard<std::mutex>(simulatorMutexes[simulator], std::adopt_lock));                                         \
+            new const std::lock_guard<std::mutex>(simulatorMutexes[simulator], std::adopt_lock));                      \
     }
 #endif
 
@@ -387,6 +387,63 @@ void RevertPauliBasis(QInterfacePtr simulator, uintq len, int* bases, uintq* qub
     }
 }
 
+// Not every simulator layer implements QParity (QTensorNetwork and QInterfaceNoisy do not, and either can
+// be the top layer). std::dynamic_pointer_cast<QParity>() then returns nullptr, which used to be
+// dereferenced (segfault in Exp(), MCExp(), Measure() and JointEnsembleProbability()). These helpers
+// use the native QParity method when it exists, and otherwise compute the parity onto the last qubit
+// with a CNOT ladder, act on that one qubit, and uncompute the ladder. "qs" are simulator-internal
+// (already shard-mapped) qubit indices.
+static bitCapInt parityMask(const std::vector<bitLenInt>& qs)
+{
+    bitCapInt mask = ZERO_BCI;
+    for (const bitLenInt& q : qs) {
+        bi_or_ip(&mask, pow2(q));
+    }
+    return mask;
+}
+
+static void parityLadder(QInterfacePtr simulator, const std::vector<bitLenInt>& qs)
+{
+    for (size_t i = 0U; (i + 1U) < qs.size(); ++i) {
+        simulator->CNOT(qs[i], qs.back());
+    }
+}
+
+static void parityLadderInverse(QInterfacePtr simulator, const std::vector<bitLenInt>& qs)
+{
+    for (size_t i = qs.size() - 1U; i > 0U; --i) {
+        simulator->CNOT(qs[i - 1U], qs.back());
+    }
+}
+
+static void CUniformParityRZHelper(
+    QInterfacePtr simulator, const std::vector<bitLenInt>& controls, const std::vector<bitLenInt>& qs, real1_f angle)
+{
+    QParityPtr qParity = QPARITY(simulator);
+    if (qParity) {
+        return qParity->CUniformParityRZ(controls, parityMask(qs), angle);
+    }
+    // Odd parity gets e^{i angle}, even parity gets e^{-i angle} (QParity::CUniformParityRZ).
+    parityLadder(simulator, qs);
+    const complex phaseFac = exp(complex(ZERO_R1, (real1)angle));
+    simulator->MCPhase(controls, std::conj(phaseFac), phaseFac, qs.back());
+    parityLadderInverse(simulator, qs);
+}
+
+static real1_f ParityHelper(QInterfacePtr simulator, const std::vector<bitLenInt>& qs, bool doMeasure)
+{
+    QParityPtr qParity = QPARITY(simulator);
+    if (qParity) {
+        const bitCapInt mask = parityMask(qs);
+        return doMeasure ? (qParity->MParity(mask) ? ONE_R1_F : ZERO_R1_F) : qParity->ProbParity(mask);
+    }
+    parityLadder(simulator, qs);
+    const real1_f result = doMeasure ? (simulator->M(qs.back()) ? ONE_R1_F : ZERO_R1_F) : simulator->Prob(qs.back());
+    parityLadderInverse(simulator, qs);
+
+    return result;
+}
+
 void removeIdentities(std::vector<int>* b, std::vector<bitLenInt>* qs)
 {
     uintq i = 0U;
@@ -468,15 +525,6 @@ void MCRHelper(uintq sid, uintq b, double phi, uintq n, uintq* c, uintq q)
     default:
         break;
     }
-}
-
-inline std::size_t make_mask(std::vector<bitLenInt> const& qs)
-{
-    std::size_t mask = 0U;
-    for (const std::size_t q : qs) {
-        mask = mask | pow2Ocl(q);
-    }
-    return mask;
 }
 
 std::map<uintq, bitLenInt>::iterator FindShardValue(bitLenInt v, std::map<uintq, bitLenInt>& simMap)
@@ -719,14 +767,12 @@ MICROSOFT_QUANTUM_DECL uintq init_count_type(_In_ uintq q, _In_ bool tn, _In_ bo
 
     bool isSuccess = true;
     QInterfacePtr simulator{ nullptr };
-    if (q) {
-        try {
-            simulator = CreateQuantumInterface(
-                simulatorType, q, ZERO_BCI, randNumGen, CMPLX_DEFAULT_ARG, false, true, hp, -1, true, sp);
-        } catch (const std::exception& ex) {
-            std::cout << ex.what() << std::endl;
-            isSuccess = false;
-        }
+    try {
+        simulator = CreateQuantumInterface(
+            simulatorType, q, ZERO_BCI, randNumGen, CMPLX_DEFAULT_ARG, false, true, hp, -1, true, sp);
+    } catch (const std::exception& ex) {
+        std::cout << ex.what() << std::endl;
+        isSuccess = false;
     }
 
     if (sid == simulators.size()) {
@@ -775,14 +821,12 @@ MICROSOFT_QUANTUM_DECL uintq init_count(_In_ uintq q, _In_ bool hp, _In_ bool sp
 
     bool isSuccess = true;
     QInterfacePtr simulator{ nullptr };
-    if (q) {
-        try {
-            simulator = CreateQuantumInterface(
-                simulatorType, q, ZERO_BCI, randNumGen, CMPLX_DEFAULT_ARG, false, true, hp, -1, true, sp);
-        } catch (const std::exception& ex) {
-            std::cout << ex.what() << std::endl;
-            isSuccess = false;
-        }
+    try {
+        simulator = CreateQuantumInterface(
+            simulatorType, q, ZERO_BCI, randNumGen, CMPLX_DEFAULT_ARG, false, true, hp, -1, true, sp);
+    } catch (const std::exception& ex) {
+        std::cout << ex.what() << std::endl;
+        isSuccess = false;
     }
 
     if (sid == simulators.size()) {
@@ -848,14 +892,12 @@ MICROSOFT_QUANTUM_DECL uintq init_count_pager(_In_ uintq q, _In_ bool hp, _In_ b
 
     bool isSuccess = true;
     QInterfacePtr simulator{ nullptr };
-    if (q) {
-        try {
-            simulator = CreateQuantumInterface(simulatorType, q, ZERO_BCI, randNumGen, CMPLX_DEFAULT_ARG, false, true,
-                hp, -1, true, sp, REAL1_EPSILON, deviceList, 0, FP_NORM_EPSILON_F);
-        } catch (const std::exception& ex) {
-            std::cout << ex.what() << std::endl;
-            isSuccess = false;
-        }
+    try {
+        simulator = CreateQuantumInterface(simulatorType, q, ZERO_BCI, randNumGen, CMPLX_DEFAULT_ARG, false, true, hp,
+            -1, true, sp, REAL1_EPSILON, deviceList, 0, FP_NORM_EPSILON_F);
+    } catch (const std::exception& ex) {
+        std::cout << ex.what() << std::endl;
+        isSuccess = false;
     }
 
     if (sid == simulators.size()) {
@@ -904,14 +946,12 @@ MICROSOFT_QUANTUM_DECL uintq init_count_stabilizer(_In_ uintq q)
 
     bool isSuccess = true;
     QInterfacePtr simulator{ nullptr };
-    if (q) {
-        try {
-            simulator =
-                CreateQuantumInterface(simulatorType, q, ZERO_BCI, randNumGen, CMPLX_DEFAULT_ARG, false, true, false);
-        } catch (const std::exception& ex) {
-            std::cout << ex.what() << std::endl;
-            isSuccess = false;
-        }
+    try {
+        simulator =
+            CreateQuantumInterface(simulatorType, q, ZERO_BCI, randNumGen, CMPLX_DEFAULT_ARG, false, true, false);
+    } catch (const std::exception& ex) {
+        std::cout << ex.what() << std::endl;
+        isSuccess = false;
     }
 
     if (sid == simulators.size()) {
@@ -1421,13 +1461,12 @@ double _JointEnsembleProbabilityHelper(QInterfacePtr simulator, uintq n, int* b,
         return 0.0;
     }
 
-    bitCapInt mask = ZERO_BCI;
+    std::vector<bitLenInt> sVec(n);
     for (bitLenInt i = 0U; i < (bitLenInt)n; ++i) {
-        bi_or_ip(&mask, pow2(GetSimShardId(simulator, qVec[i])));
+        sVec[i] = GetSimShardId(simulator, qVec[i]);
     }
 
-    return (double)(doMeasure ? (QPARITY(simulator)->MParity(mask) ? ONE_R1 : ZERO_R1)
-                              : QPARITY(simulator)->ProbParity(mask));
+    return (double)ParityHelper(simulator, sVec, doMeasure);
 }
 
 /**
@@ -1886,11 +1925,12 @@ MICROSOFT_QUANTUM_DECL void MCAdjT(_In_ uintq sid, _In_ uintq n, _In_reads_(n) u
  * (External API) Controlled 3-parameter unitary gate
  */
 MICROSOFT_QUANTUM_DECL void MCU(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_ uintq q, _In_ double theta,
-    _In_ double phi, _In_ double lambda)
+    _In_ double phi, _In_ double lambda, _In_ double gamma)
 {
     MAP_CONTROLS_AND_LOCK(sid, n)
     try {
-        simulator->CU(ctrlsArray, GetSimShardId(simulator, q), (real1_f)theta, (real1_f)phi, (real1_f)lambda);
+        simulator->CU(
+            ctrlsArray, GetSimShardId(simulator, q), (real1_f)theta, (real1_f)phi, (real1_f)lambda, (real1_f)gamma);
     } catch (const std::exception& ex) {
         simulatorErrors[sid] = 1;
         std::cout << ex.what() << std::endl;
@@ -2034,11 +2074,12 @@ MICROSOFT_QUANTUM_DECL void MACAdjT(_In_ uintq sid, _In_ uintq n, _In_reads_(n) 
  * (External API) Controlled 3-parameter unitary gate
  */
 MICROSOFT_QUANTUM_DECL void MACU(_In_ uintq sid, _In_ uintq n, _In_reads_(n) uintq* c, _In_ uintq q, _In_ double theta,
-    _In_ double phi, _In_ double lambda)
+    _In_ double phi, _In_ double lambda, _In_ double gamma)
 {
     MAP_CONTROLS_AND_LOCK(sid, n)
     try {
-        simulator->AntiCU(ctrlsArray, GetSimShardId(simulator, q), (real1_f)theta, (real1_f)phi, (real1_f)lambda);
+        simulator->AntiCU(
+            ctrlsArray, GetSimShardId(simulator, q), (real1_f)theta, (real1_f)phi, (real1_f)lambda, (real1_f)gamma);
     } catch (const std::exception& ex) {
         simulatorErrors[sid] = 1;
         std::cout << ex.what() << std::endl;
@@ -2202,8 +2243,11 @@ MICROSOFT_QUANTUM_DECL void Exp(
         } else {
             TransformPauliBasis(simulator, n, b, q);
 
-            std::size_t mask = make_mask(qVec);
-            QPARITY(simulator)->UniformParityRZ(mask, (real1_f)(-phi));
+            // Map user qubit IDs to simulator indices (as every other entry point does).
+            for (bitLenInt& qb : qVec) {
+                qb = GetSimShardId(simulator, qb);
+            }
+            CUniformParityRZHelper(simulator, std::vector<bitLenInt>(), qVec, (real1_f)(-phi));
 
             RevertPauliBasis(simulator, n, b, q);
         }
@@ -2238,12 +2282,17 @@ MICROSOFT_QUANTUM_DECL void MCExp(_In_ uintq sid, _In_ uintq n, _In_reads_(n) in
         } else if (bVec.size() == 1U) {
             MCRHelper(sid, bVec.front(), -2. * phi, nc, cs, qVec.front());
         } else {
-            std::vector<bitLenInt> csVec(cs, cs + nc);
+            std::vector<bitLenInt> csVec(nc);
+            for (uintq i = 0U; i < nc; ++i) {
+                csVec[i] = GetSimShardId(simulator, cs[i]);
+            }
 
             TransformPauliBasis(simulator, n, b, q);
 
-            std::size_t mask = make_mask(qVec);
-            QPARITY(simulator)->CUniformParityRZ(csVec, mask, (real1_f)(-phi));
+            for (bitLenInt& qb : qVec) {
+                qb = GetSimShardId(simulator, qb);
+            }
+            CUniformParityRZHelper(simulator, csVec, qVec, (real1_f)(-phi));
 
             RevertPauliBasis(simulator, n, b, q);
         }
@@ -2312,7 +2361,7 @@ MICROSOFT_QUANTUM_DECL void MAllLong(_In_ uintq sid, uintq* r)
 {
     SIMULATOR_LOCK_GUARD_VOID(sid)
     try {
-#if QBCCAPOW <= UINTPOW
+#if QBCAPPOW <= UINTPOW
         r[0U] = (bitCapIntOcl)(simulator->MAll());
 #else
         bitCapInt _r = simulator->MAll();
@@ -2711,7 +2760,7 @@ MICROSOFT_QUANTUM_DECL void HighestProbAll(_In_ uintq sid, uintq* r)
 {
     SIMULATOR_LOCK_GUARD_VOID(sid)
     try {
-#if QBCCAPOW <= UINTPOW
+#if QBCAPPOW <= UINTPOW
         r[0U] = (bitCapIntOcl)(simulator->HighestProbAll());
 #else
         bitCapInt _r = simulator->HighestProbAll();
@@ -2736,7 +2785,7 @@ MICROSOFT_QUANTUM_DECL void HighestProbAllN(_In_ uintq sid, _In_ uintq n, uintq*
 {
     SIMULATOR_LOCK_GUARD_VOID(sid)
     try {
-#if QBCCAPOW <= UINTPOW
+#if QBCAPPOW <= UINTPOW
         const std::vector<bitCapInt> _r = simulator->HighestProbAll(n);
         for (size_t i = 0U; i < n; ++i) {
             r[i] = (bitCapIntOcl)(_r[i]);
@@ -3649,6 +3698,30 @@ MICROSOFT_QUANTUM_DECL void Separate(_In_ uintq sid, _In_ uintq n, _In_reads_(n)
     for (uintq i = 0U; i < n; ++i) {
         simulator->Swap(end - i, bitArray[i]);
     }
+}
+
+MICROSOFT_QUANTUM_DECL bool AreFactorized(
+    _In_ uintq sid, _In_ uintq n1, _In_reads_(n1) uintq* a, _In_ uintq n2, _In_reads_(n2) uintq* b, _In_ bool fc)
+{
+    SIMULATOR_LOCK_GUARD_BOOL(sid)
+
+    std::vector<bitLenInt> bitArrayA(n1);
+    for (uintq i = 0U; i < n1; ++i) {
+        bitArrayA[i] = GetSimShardId(simulator, a[i]);
+    }
+    std::vector<bitLenInt> bitArrayB(n2);
+    for (uintq i = 0U; i < n2; ++i) {
+        bitArrayB[i] = GetSimShardId(simulator, b[i]);
+    }
+
+    try {
+        return simulator->AreFactorized(bitArrayA, bitArrayB, fc);
+    } catch (const std::exception& ex) {
+        simulatorErrors[sid] = 1;
+        std::cout << ex.what() << std::endl;
+    }
+
+    return false;
 }
 
 MICROSOFT_QUANTUM_DECL double GetUnitaryFidelity(_In_ uintq sid)

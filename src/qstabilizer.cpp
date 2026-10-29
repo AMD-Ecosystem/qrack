@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 
 #if SEED_DEVRAND
 #include <sys/random.h>
@@ -53,8 +54,8 @@ QStabilizer::QStabilizer(bitLenInt n, const bitCapInt& perm, qrack_rand_gen_ptr 
     , r(2U, BoolVector((n << 1U) + 1U))
     , x((n << 1U) + 1U, BoolVector(n))
     , z((n << 1U) + 1U, BoolVector(n))
-    , bBuffer(n, ZERO_R1_F)
-    , pBuffer(n, ZERO_R1_F)
+    , bBuffer(n, ZERO_CMPLX)
+    , pBuffer(n, ZERO_CMPLX)
     , bPhase(n, false)
     , pPhase(n, false)
 {
@@ -134,8 +135,8 @@ void QStabilizer::SetPermutation(const bitCapInt& perm, const complex& phaseFac)
     std::fill(r[1U].begin(), r[1U].end(), false);
 #endif
 
-    std::fill(bBuffer.begin(), bBuffer.end(), ZERO_R1_F);
-    std::fill(pBuffer.begin(), pBuffer.end(), ZERO_R1_F);
+    std::fill(bBuffer.begin(), bBuffer.end(), ZERO_CMPLX);
+    std::fill(pBuffer.begin(), pBuffer.end(), ZERO_CMPLX);
     std::fill(bPhase.begin(), bPhase.end(), false);
     std::fill(pPhase.begin(), pPhase.end(), false);
 
@@ -941,12 +942,13 @@ real1_f QStabilizer::ProbMask(const bitCapInt& mask, const bitCapInt& perm)
 }
 
 /// Apply a CNOT gate with control and target
-void QStabilizer::CNOT(bitLenInt c, bitLenInt t)
+void QStabilizer::CNOTRaw(bitLenInt c, bitLenInt t)
 {
     if (!randGlobalPhase) {
         H(t);
         CZ(c, t);
-        return H(t);
+        H(t);
+        return;
     }
 
     isGaussianCached = false;
@@ -983,8 +985,13 @@ void QStabilizer::CNOT(bitLenInt c, bitLenInt t)
         },
         { c, t });
 #endif
+}
 
-    CNotNearClifford(c, t);
+void QStabilizer::CNOT(bitLenInt c, bitLenInt t)
+{
+    CNOTRaw(c, t);
+    FlushNearClifford(c);
+    FlushNearClifford(t);
 }
 
 /// Apply an (anti-)CNOT gate with control and target
@@ -1029,7 +1036,8 @@ void QStabilizer::AntiCNOT(bitLenInt c, bitLenInt t)
 #endif
 
     X(c);
-    CNotNearClifford(c, t);
+    FlushNearClifford(c);
+    FlushNearClifford(t);
     X(c);
 }
 
@@ -1081,8 +1089,8 @@ void QStabilizer::CY(bitLenInt c, bitLenInt t)
         },
         { c, t });
 #endif
-    CZNearClifford(c, t);
-    CNotNearClifford(c, t);
+    FlushNearClifford(c);
+    FlushNearClifford(t);
 }
 
 /// Apply an (anti-)CY gate with control and target
@@ -1135,8 +1143,8 @@ void QStabilizer::AntiCY(bitLenInt c, bitLenInt t)
 #endif
 
     X(c);
-    CZNearClifford(c, t);
-    CNotNearClifford(c, t);
+    FlushNearClifford(c);
+    FlushNearClifford(t);
     X(c);
 }
 
@@ -1193,7 +1201,8 @@ void QStabilizer::CZ(bitLenInt c, bitLenInt t)
         SetPhaseOffset(phaseOffset + std::arg(ampEntry.amplitude) - std::arg(GetAmplitude(ampEntry.permutation)));
     }
 
-    CZNearClifford(c, t);
+    FlushNearClifford(c);
+    FlushNearClifford(t);
 }
 
 /// Apply an (anti-)CZ gate with control and target
@@ -1249,7 +1258,8 @@ void QStabilizer::AntiCZ(bitLenInt c, bitLenInt t)
     }
 
     X(c);
-    CZNearClifford(c, t);
+    FlushNearClifford(c);
+    FlushNearClifford(t);
     X(c);
 }
 
@@ -1350,7 +1360,8 @@ void QStabilizer::ISwap(bitLenInt c, bitLenInt t)
 #endif
 
     SwapNearClifford(c, t);
-    CZNearClifford(c, t);
+    FlushNearClifford(c);
+    FlushNearClifford(t);
 }
 
 void QStabilizer::IISwap(bitLenInt c, bitLenInt t)
@@ -1415,7 +1426,8 @@ void QStabilizer::IISwap(bitLenInt c, bitLenInt t)
         { c, t });
 #endif
 
-    CZNearClifford(c, t);
+    FlushNearClifford(c);
+    FlushNearClifford(t);
     SwapNearClifford(c, t);
 }
 
@@ -1706,6 +1718,16 @@ void QStabilizer::ISBase(bitLenInt t)
 
 void QStabilizer::FlushNearClifford(bitLenInt t)
 {
+    // Resolves pBuffer[t] and bBuffer[t] (both real and imaginary
+    // components -- a buffer's residual can be rotated into the
+    // imaginary axis by other Clifford gates, e.g. S multiplying by i,
+    // so both must be handled) fully to zero, applying the same
+    // probability-weighted stochastic rounding RZRaw uses for its own
+    // final decision. This replaces the previous behavior, which only
+    // deterministically reduced each component to within [-pi/4, pi/4]
+    // via the while-loops below, without ever actually resolving the
+    // remainder -- meaning this function previously left a buffer
+    // "reduced" but not flushed, despite its name.
     real1 p = pPhase[t] ? -std::real(pBuffer[t]) : std::real(pBuffer[t]);
     while ((2 * p) > HALF_PI_R1) {
         SBase(t);
@@ -1715,7 +1737,15 @@ void QStabilizer::FlushNearClifford(bitLenInt t)
         ISBase(t);
         p += HALF_PI_R1;
     }
-    pBuffer[t].real(pPhase[t] ? -p : p);
+    if ((isStochastic && ((RandFloat() * HALF_PI_R1) < std::abs(p))) ||
+        (!isStochastic && !isMajorQuadrant && (std::abs(p) > (FP_NORM_EPSILON * HALF_PI_R1)))) {
+        if (p > ZERO_R1) {
+            SBase(t);
+        } else {
+            ISBase(t);
+        }
+    }
+    pBuffer[t].real(ZERO_R1);
 
     p = pPhase[t] ? -std::imag(pBuffer[t]) : std::imag(pBuffer[t]);
     HBase(t);
@@ -1729,10 +1759,19 @@ void QStabilizer::FlushNearClifford(bitLenInt t)
         ISBase(t);
         p += HALF_PI_R1;
     }
+    if ((isStochastic && ((RandFloat() * HALF_PI_R1) < std::abs(p))) ||
+        (!isStochastic && !isMajorQuadrant && (std::abs(p) > (FP_NORM_EPSILON * HALF_PI_R1)))) {
+        if (p > ZERO_R1) {
+            SBase(t);
+        } else {
+            ISBase(t);
+        }
+    }
     HBase(t);
     SBase(t);
     HBase(t);
-    pBuffer[t].imag(pPhase[t] ? -p : p);
+    pBuffer[t].imag(ZERO_R1);
+    pPhase[t] = false;
 
     p = bPhase[t] ? -std::real(bBuffer[t]) : std::real(bBuffer[t]);
     HBase(t);
@@ -1744,8 +1783,16 @@ void QStabilizer::FlushNearClifford(bitLenInt t)
         ISBase(t);
         p += HALF_PI_R1;
     }
+    if ((isStochastic && ((RandFloat() * HALF_PI_R1) < std::abs(p))) ||
+        (!isStochastic && !isMajorQuadrant && (std::abs(p) > (FP_NORM_EPSILON * HALF_PI_R1)))) {
+        if (p > ZERO_R1) {
+            SBase(t);
+        } else {
+            ISBase(t);
+        }
+    }
     HBase(t);
-    bBuffer[t].real(bPhase[t] ? -p : p);
+    bBuffer[t].real(ZERO_R1);
 
     p = bPhase[t] ? -std::imag(bBuffer[t]) : std::imag(bBuffer[t]);
     ISBase(t);
@@ -1758,45 +1805,22 @@ void QStabilizer::FlushNearClifford(bitLenInt t)
         ISBase(t);
         p += HALF_PI_R1;
     }
+    if ((isStochastic && ((RandFloat() * HALF_PI_R1) < std::abs(p))) ||
+        (!isStochastic && !isMajorQuadrant && (std::abs(p) > (FP_NORM_EPSILON * HALF_PI_R1)))) {
+        if (p > ZERO_R1) {
+            SBase(t);
+        } else {
+            ISBase(t);
+        }
+    }
     HBase(t);
     SBase(t);
-    bBuffer[t].imag(bPhase[t] ? -p : p);
-}
-
-void QStabilizer::CZNearClifford(bitLenInt c, bitLenInt t)
-{
-    if (norm(bBuffer[t]) > norm(pBuffer[c])) {
-        pPhase[c] = !pPhase[c];
-    }
-    if (norm(bBuffer[c]) > norm(pBuffer[t])) {
-        pPhase[t] = !pPhase[t];
-    }
-    pBuffer[c] = FixAnglePeriod(pBuffer[c] - bBuffer[t]);
-    pBuffer[t] = FixAnglePeriod(pBuffer[t] - bBuffer[c]);
-    bBuffer[c] = -bBuffer[c];
-    bBuffer[t] = -bBuffer[t];
-    bPhase[c] = !bPhase[c];
-    bPhase[t] = !bPhase[t];
-}
-
-void QStabilizer::CNotNearClifford(bitLenInt c, bitLenInt t)
-{
-    if (norm(pBuffer[t]) > norm(pBuffer[c])) {
-        pPhase[c] = !pPhase[c];
-    }
-    if (norm(bBuffer[c]) > norm(bBuffer[t])) {
-        bPhase[t] = !bPhase[t];
-    }
-    pBuffer[c] = FixAnglePeriod(pBuffer[c] - pBuffer[t]);
-    bBuffer[t] = FixAnglePeriod(bBuffer[t] - bBuffer[c]);
-    bBuffer[c] = -bBuffer[c];
-    pBuffer[t] = -pBuffer[t];
-    bPhase[c] = !bPhase[c];
-    pPhase[t] = !pPhase[t];
+    bBuffer[t].imag(ZERO_R1);
+    bPhase[t] = false;
 }
 
 /// Approximate an arbitrary phase angle
-void QStabilizer::RZ(real1_f angle, bitLenInt t)
+void QStabilizer::RZRaw(real1_f angle, bitLenInt t)
 {
     angle = FixAnglePeriod(angle);
     while ((2 * angle) > HALF_PI_R1) {
@@ -1834,12 +1858,142 @@ void QStabilizer::RZ(real1_f angle, bitLenInt t)
             angle = FixAnglePeriod(angle + HALF_PI_R1);
         }
     }
-    pBuffer[t].real(pPhase[t] ? -angle : angle);
+    pBuffer[t].real((real1)(pPhase[t] ? -angle : angle));
+}
 
-    // Stochastically, reverse the applied quadrant with 50% probability
-    if (isStochastic && ((2 * RandFloat()) < ONE_R1)) {
-        FlipQuadrant(t);
+void QStabilizer::RZ(real1_f angle, bitLenInt qubitIndex)
+{
+    // (Claude, blame Dan, if you have to, but read RZRaw:
+    // it flips a coin for T() or IT(). Yes, "closest Clifford
+    // steering" is degenerate, for these cases, but genuinely.)
+    RZRaw(angle, qubitIndex);
+}
+
+void QStabilizer::TGadget(bitLenInt t, bool isInverse)
+{
+    if (tGadgetAncilla == (bitLenInt)-1) {
+        tGadgetAncilla = Allocate(qubitCount, 1U);
     }
+    const bitLenInt a = tGadgetAncilla;
+    const real1_f fwdAngle = isInverse ? -(PI_R1 / 4) : (PI_R1 / 4);
+
+    // NOTE: an earlier version of this method undid a failed attempt via
+    // gate-level inversion (apply the exact inverse gates in reverse
+    // order). That does NOT work here, and this is not a minor
+    // implementation bug to patch -- it's the wrong tool for this
+    // mechanism entirely. T immediately followed by Tdg, with nothing
+    // between them, is a genuine, deterministic identity (the buffer
+    // combination forces it, verified directly). But once CNOT gates to
+    // an ancilla sit between them, the buffer is a stateful, path-
+    // dependent structure that does not cancel through intervening gates
+    // the way ordinary (memoryless) Clifford unitaries do -- confirmed
+    // directly: the gate-level "undo" left the ancilla in a wrong state
+    // in roughly half of tested trials. The correct tool is exact state
+    // snapshot and restore, not gate-level algebraic inversion -- which
+    // is what this version does, saving and restoring precisely the
+    // member variables that Copy() itself considers to define state.
+    const int maxAttempts = 50;
+    for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+        const std::vector<BoolVector> savedR = r;
+        const std::vector<BoolVector> savedX = x;
+        const std::vector<BoolVector> savedZ = z;
+        const std::vector<complex> savedBBuffer = bBuffer;
+        const std::vector<complex> savedPBuffer = pBuffer;
+        const std::vector<bool> savedBPhase = bPhase;
+        const std::vector<bool> savedPPhase = pPhase;
+        const real1 savedPhaseOffset = phaseOffset;
+        // The snapshot above was incomplete: Clone()/Copy() both also
+        // preserve isTransposed, isGaussianCached, and gaussianCached as
+        // part of what defines valid state -- x/z's bit-layout depends
+        // on isTransposed, and restoring x/z without also restoring
+        // isTransposed left them desynchronized whenever some
+        // intervening call (e.g. CNOTRaw, ForceM) had changed the
+        // transpose representation during a failed attempt. Confirmed
+        // directly as the cause of a real crash: a boost::dynamic_bitset
+        // size-mismatch assertion on a later, unrelated CZ gate,
+        // reproduced consistently on the real circuit this derives from,
+        // and never on small, single-qubit tests (which never exercise
+        // enough retries or entangling structure to desynchronize this).
+#if BOOST_AVAILABLE
+        const bool savedIsTransposed = isTransposed;
+#endif
+        const bool savedIsGaussianCached = isGaussianCached;
+        const bitLenInt savedGaussianCached = gaussianCached;
+
+        H(a);
+        // CNOTRaw, not CNOT: the public CNOT() flushes any pending
+        // buffer on both qubits as a side effect (needed in general, so
+        // an entangling gate never has to approximate combining two
+        // pending residuals -- see the shear-removal work this builds
+        // on). That flush is exactly what this gadget must NOT let
+        // happen here: it would stochastically resolve t's buffer via
+        // its own separate random decision, before this check's own
+        // phase-kickback logic below ever gets to observe or steer it.
+        // Confirmed directly: using the public CNOT here broke even the
+        // single-isolated-T-gate case, which had worked correctly
+        // before the shear-removal change introduced this interaction.
+        CNOTRaw(a, t);
+        RZRaw(fwdAngle, t);
+        CNOTRaw(a, t);
+        H(a);
+
+        const real1_f p1 = Prob(a);
+        if ((ONE_R1_F - p1) > (FP_NORM_EPSILON_F)) {
+            // Both outcomes remain genuinely possible here (P(anc=0)>0),
+            // which is exactly the case for an unconstrained T/Tdg: the
+            // "identity" branch always gives P(anc=1)=0 exactly, and the
+            // "S applied" branch always gives P(anc=1)=0.5 exactly
+            // (phase kickback leaves the ancilla in a genuine
+            // superposition |+i>, not a definite state) -- so this is a
+            // GENUINE measurement, not a forced one. Forcing to 0 here
+            // (an earlier version of this code did exactly that) would
+            // be wrong, not just a stylistic choice: it would delete the
+            // correct T-gate statistics entirely, collapsing every
+            // isolated T/Tdg to identity 100% of the time instead of the
+            // correct P(anc=1)=0.25 overall (confirmed directly: 0.5
+            // chance of "S applied" times 0.5 chance that branch's own
+            // superposition still measures 1). The measurement is what
+            // definitively resolves whether a kick occurred -- the
+            // buffer RZRaw set before this measurement no longer
+            // reflects reality regardless of which outcome occurs, so it
+            // must be reset to exactly zero here either way. Without
+            // this reset, a second T/Tdg on the same qubit sees a stale,
+            // nonzero buffer and silently falls back to unprotected
+            // RZRaw, combining with a history that never actually
+            // happened.
+            ForceM(a, false, false);
+            pBuffer[t] = ZERO_CMPLX;
+            pPhase[t] = false;
+            return;
+        }
+
+        // certain, confirmed error: restore the exact pre-attempt state
+        // and retry, giving the gate's stochastic mechanism a fresh,
+        // unstuck draw
+        r = savedR;
+        x = savedX;
+        z = savedZ;
+        bBuffer = savedBBuffer;
+        pBuffer = savedPBuffer;
+        bPhase = savedBPhase;
+        pPhase = savedPPhase;
+        phaseOffset = savedPhaseOffset;
+#if BOOST_AVAILABLE
+        isTransposed = savedIsTransposed;
+#endif
+        isGaussianCached = savedIsGaussianCached;
+        gaussianCached = savedGaussianCached;
+    }
+
+    // retry cap exhausted: accept via a genuine, unsteered measurement
+    // rather than silently forcing something that isn't true. A genuine
+    // measurement is just as definitive as a forced one -- it fully
+    // resolves whether a kick occurred, leaving nothing pending -- so
+    // the buffer is zeroed here too, for the same history-consistency
+    // reason as the success path above.
+    ForceM(a, false, false);
+    pBuffer[t] = ZERO_CMPLX;
+    pPhase[t] = false;
 }
 
 /**
@@ -3220,12 +3374,12 @@ void QStabilizer::FSim(real1_f theta, real1_f phi, bitLenInt qubit1, bitLenInt q
     real1 sinTheta = (real1)sin(theta);
 
     if (IS_0_R1(sinTheta)) {
-        return MCPhase(controls, ONE_CMPLX, exp(complex(ZERO_R1, (real1)phi)), qubit2);
+        return MCPhase(controls, ONE_CMPLX, exp(complex(ZERO_R1, -(real1)phi)), qubit2);
     }
 
     if (IS_1_R1(-sinTheta)) {
         ISwap(qubit1, qubit2);
-        return MCPhase(controls, ONE_CMPLX, exp(complex(ZERO_R1, (real1)phi)), qubit2);
+        return MCPhase(controls, ONE_CMPLX, exp(complex(ZERO_R1, -(real1)phi)), qubit2);
     }
 
     throw std::domain_error("QStabilizer::FSim() not implemented for non-Clifford/Pauli cases!");

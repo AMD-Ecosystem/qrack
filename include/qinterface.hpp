@@ -910,8 +910,8 @@ public:
      * single bit unitary gates, (up to a global phase factor which has no effect on Hermitian operator expectation
      * values).
      */
-    virtual void CU(
-        const std::vector<bitLenInt>& controls, bitLenInt target, real1_f theta, real1_f phi, real1_f lambda);
+    virtual void CU(const std::vector<bitLenInt>& controls, bitLenInt target, real1_f theta, real1_f phi,
+        real1_f lambda, real1_f gamma = ZERO_R1_F);
 
     /**
      * (Anti-)Controlled general unitary gate
@@ -920,8 +920,8 @@ public:
      * possible single bit unitary gates, (up to a global phase factor which has no effect on Hermitian operator
      * expectation values).
      */
-    virtual void AntiCU(
-        const std::vector<bitLenInt>& controls, bitLenInt target, real1_f theta, real1_f phi, real1_f lambda);
+    virtual void AntiCU(const std::vector<bitLenInt>& controls, bitLenInt target, real1_f theta, real1_f phi,
+        real1_f lambda, real1_f gamma = ZERO_R1_F);
 
     /**
      * Hadamard gate
@@ -1077,6 +1077,20 @@ public:
         }
 
         Phase(ONE_CMPLX, pow(-ONE_CMPLX, (real1)(ONE_R1 / pow2Ocl(n - 1U))), qubit);
+    }
+
+    /**
+     * Inverse "PhaseRootN" gate
+     *
+     * Applies a 2 * PI_R1 / (2^N) phase rotation to the qubit at "qubit."
+     */
+    virtual void IPhaseRootN(bitLenInt n, bitLenInt qubit)
+    {
+        if (n == 0) {
+            return;
+        }
+
+        Phase(ONE_CMPLX, pow(-ONE_CMPLX, (real1)(-ONE_R1 / pow2Ocl(n - 1U))), qubit);
     }
 
     /**
@@ -2216,19 +2230,31 @@ public:
 
     /** Multiplication modulo N by integer, (out of place) */
     virtual void MULModNOut(
-        const bitCapInt& toMul, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart, bitLenInt length);
+        const bitCapInt& toMul, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart, bitLenInt length)
+    {
+        throw std::logic_error("QInterface::MULModNOut not implemented!");
+    }
 
     /** Inverse of multiplication modulo N by integer, (out of place) */
     virtual void IMULModNOut(
-        const bitCapInt& toMul, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart, bitLenInt length);
+        const bitCapInt& toMul, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart, bitLenInt length)
+    {
+        throw std::logic_error("QInterface::IMULModNOut not implemented!");
+    }
 
     /** Controlled multiplication modulo N by integer, (out of place) */
     virtual void CMULModNOut(const bitCapInt& toMul, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart,
-        bitLenInt length, const std::vector<bitLenInt>& controls);
+        bitLenInt length, const std::vector<bitLenInt>& controls)
+    {
+        throw std::logic_error("QInterface::CMULModNOut not implemented!");
+    }
 
     /** Inverse of controlled multiplication modulo N by integer, (out of place) */
     virtual void CIMULModNOut(const bitCapInt& toMul, const bitCapInt& modN, bitLenInt inStart, bitLenInt outStart,
-        bitLenInt length, const std::vector<bitLenInt>& controls);
+        bitLenInt length, const std::vector<bitLenInt>& controls)
+    {
+        throw std::logic_error("QInterface::CIMULModNOut not implemented!");
+    }
 
     /**
      * Quantum analog of classical "Full Adder" gate
@@ -2420,24 +2446,26 @@ public:
             return IISwap(qubit1, qubit2);
         }
 
-        // Decompose root of ISWAP gate:
+        // fSim swap block: exp(-i theta/2 (XX + YY)) = RXX(theta) RYY(theta),
+        // which acts as cos(theta) |01><01| - i sin(theta) |01><10| (+ h.c.) on the {|01>, |10>} subspace.
+        // (RZ(a) = exp(-i a/2 Z), so CNOT RZ(theta) CNOT = exp(-i theta/2 ZZ); RZ(2 * theta) applied fSim(2 * theta).)
 
-        // RXX
+        // RXX(theta)
         H(qubit1);
         H(qubit2);
         CNOT(qubit1, qubit2);
-        RZ(2 * theta, qubit2);
+        RZ(theta, qubit2);
         CNOT(qubit1, qubit2);
         H(qubit2);
         H(qubit1);
 
-        // RYY
+        // RYY(theta)
         S(qubit1);
         S(qubit2);
         H(qubit1);
         H(qubit2);
         CNOT(qubit1, qubit2);
-        RZ(2 * theta, qubit2);
+        RZ(theta, qubit2);
         CNOT(qubit1, qubit2);
         H(qubit2);
         H(qubit1);
@@ -2917,6 +2945,13 @@ public:
      *  Two-qubit TrySeparate()
      */
     virtual bool TrySeparate(bitLenInt qubit1, bitLenInt qubit2) { return false; }
+    /**
+     *  Check if two vectors of qubit indices are factorized, in internal representation
+     */
+    virtual bool AreFactorized(std::vector<bitLenInt> a, std::vector<bitLenInt> b, bool flushCache = false)
+    {
+        return false;
+    }
     /**
      * When "Schmidt-decomposition rounding parameter" ("SDRP") is being used, starting from initial 1.0 fidelity, we
      * compound the "unitary fidelity" by successive multiplication by one minus two times the true unitary probability
