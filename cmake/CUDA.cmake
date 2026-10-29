@@ -39,7 +39,11 @@ if (ENABLE_CUDA AND USE_HIP)
     target_link_libraries (qrack PUBLIC hip::host)
     target_compile_definitions (qrack PUBLIC __HIP_PLATFORM_AMD__=1)
     target_include_directories (qrack PUBLIC ${PROJECT_BINARY_DIR})
-    set_target_properties(qrack PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
+    # Targets created before enable_language(HIP) did not see auto-detected
+    # architectures, and every target linking qrack links as HIP.
+    list(REMOVE_DUPLICATES CMAKE_HIP_ARCHITECTURES)
+    get_property(QRACK_HIP_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    set_target_properties(${QRACK_HIP_TARGETS} PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
 
     # The CUDA backend sources compile unchanged as HIP via the cuda_to_hip.h shim.
     set_source_files_properties(
