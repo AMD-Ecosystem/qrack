@@ -217,10 +217,10 @@ where `-DENABLE_CUDA=ON` is required to enable CUDA, `-DENABLE_OPENCL=OFF` will 
 The CUDA engine can also be built with HIP for AMD GPUs. With ROCm installed, use this CMake command:
 
 ```sh
-cmake -DENABLE_CUDA=ON -DUSE_HIP=ON [-DENABLE_OPENCL=OFF] [-DCMAKE_HIP_ARCHITECTURES=gfx942] [-DCMAKE_PREFIX_PATH=/opt/rocm] ..
+cmake -DENABLE_CUDA=ON -DUSE_HIP=ON -DENABLE_OPENCL=OFF [-DCMAKE_HIP_ARCHITECTURES=gfx942] [-DCMAKE_PREFIX_PATH=/opt/rocm] ..
 ```
 
-where `-DUSE_HIP=ON` compiles the CUDA engine sources with the ROCm HIP compiler instead of `nvcc`, and the remaining options behave as in the CUDA build above. `-DCMAKE_HIP_ARCHITECTURES` optionally specifies an explicit list of AMD GPU architectures; if it is not set, CMake detects the GPUs installed on the build machine. At runtime, the HIP build is selected through the same CUDA engine types and options (for example, `--proc-cuda` in the unit tests).
+where `-DUSE_HIP=ON` compiles the CUDA engine sources with the ROCm HIP compiler instead of `nvcc`, and `-DENABLE_OPENCL=OFF` is required, because with OpenCL enabled the CUDA engine, and so the HIP build, is turned off. `-DCMAKE_HIP_ARCHITECTURES` optionally specifies an explicit list of AMD GPU architectures; if it is not set, CMake detects the GPUs installed on the build machine. `-DCMAKE_PREFIX_PATH` optionally points CMake at a ROCm installation it does not find by default. At runtime, the HIP build is selected through the same CUDA engine types and options (for example, `--proc-cuda` in the unit tests).
 
 ## Distributed OpenCL (and CUDA)
 

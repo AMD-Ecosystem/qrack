@@ -23,7 +23,11 @@ if (ENABLE_CUDA AND NOT USE_HIP)
 endif()
 
 message ("CUDA Support is: ${ENABLE_CUDA}")
-message ("HIP (ROCm) backend is: ${USE_HIP}")
+if (ENABLE_CUDA AND USE_HIP)
+    message ("HIP (ROCm) backend is: ON")
+else ()
+    message ("HIP (ROCm) backend is: OFF")
+endif ()
 
 if (ENABLE_CUDA AND USE_HIP)
     # enable_language(HIP) honors an explicit -DCMAKE_HIP_ARCHITECTURES, otherwise
