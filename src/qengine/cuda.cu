@@ -213,8 +213,7 @@ void QEngineCUDA::SetAmplitudePage(
     pageEngineOclPtr->clFinish();
 
     tryCuda("Failed to enqueue buffer copy", [&] {
-        return cudaMemcpy((complex*)stateBuffer.get() + dstOffset, (complex*)oStateBuffer.get() + srcOffset,
-            sizeof(complex) * length, cudaMemcpyDeviceToDevice);
+        return cudaMemcpy(oStateBuffer.get(), stateBuffer.get(), sizeof(complex) * srcOffset, cudaMemcpyDeviceToDevice);
     });
 
     runningNorm = REAL1_DEFAULT_ARG;
