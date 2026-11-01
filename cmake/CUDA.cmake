@@ -105,4 +105,4 @@ elseif (ENABLE_CUDA)
         src/qunitmulti.cpp
         )
 
-endif(ENABLE_CUDA)
+endif ()
